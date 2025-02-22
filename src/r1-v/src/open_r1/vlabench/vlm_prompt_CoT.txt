@@ -1,0 +1,185 @@
+In Skill Lab, we provide a series of robot skills to support efficient automated operations for various tasks. Each skill has a specific call format, which includes the skill name and corresponding parameters.
+
+The available skills are as follows:
+
+1. **pick**: Used to grasp and pick up a target object.
+   - Call format:
+     ```json
+     {
+       "name": "pick",
+       "params": {
+         "target_entity_name": Target Number
+       }
+     }
+     ```
+
+2. **place**: Place an object in a specified location, suitable for vertical placement.
+   - Call format:
+     ```json
+     {
+       "name": "place",
+       "params": {
+         "target_container_name": Target Number
+       }
+     }
+     ```
+
+3. **press**: Press a specified location or button.
+   - Call format:
+     ```json
+     {
+       "name": "press",
+       "params": {
+         "target_entity_name": Target Number
+       }
+     }
+     ```
+
+4. **open_door**: Open a door.
+   - Call format:
+     ```json
+     {
+       "name": "open_door",
+       "params": {
+       }
+     }
+     ```
+
+5. **insert**: Insert an item into a target location.
+   - Call format:
+     ```json
+     {
+       "name": "insert",
+       "params": {
+         "target_container_name": Target Number
+       }
+     }
+     ```
+
+6. **pull**: Pull the robotic arm horizontally.
+   - Call format:
+     ```json
+     {
+       "name": "pull",
+       "params": {
+       }
+     }
+     ```
+
+7. **pour**: Pour a liquid or granular substance.
+   - Call format:
+     ```json
+     {
+       "name": "pour",
+       "params": {
+         "target_container_name": Target Number
+       }
+     }
+     ```
+
+8. **push**: Push a target object horizontally.
+   - Call format:
+     ```json
+     {
+       "name": "push",
+       "params": {
+         "target_container_name": Target Number
+       }
+     }
+     ```
+
+9. **lift**: Lift the robotic arm vertically.
+   - Call format:
+     ```json
+     {
+       "name": "lift",
+       "params": {
+       }
+     }
+     ```
+
+These call formats ensure that each skill operation has clearly defined parameters, allowing the system to accurately execute the specified automated tasks.
+
+---
+
+You will receive the following input:
+
+1. **Image input**: Two images
+   - The first image shows four different perspectives of objects (without labels).
+   - The second image contains the same four perspectives of objects, but each view is labeled with a number (representing each object's identifier).
+
+2. **Language input**: A task instruction describing the specific requirement. Based on this instruction, you need to analyze the task, reason about the required steps, and generate a sequence of skill calls to fulfill the task. Note that all directional references in the language are relative to the robot arm as the central origin.
+
+---
+
+### Task Requirements:
+
+For each task, you should:
+1. First analyze and reason about the task using Chain-of-Thought within <think> tags
+2. Then provide the final skill call sequence within <answer> tags
+
+Your reasoning should include:
+- Analysis of the scene and object relationships
+- Identification of key objects and their numbers from the labeled image
+- Step-by-step breakdown of the required actions
+- Consideration of spatial relationships and movement constraints
+- Explanation of why specific skills are chosen over others
+
+---
+
+### Example Format:
+
+<think>
+1. Task Analysis:
+   - The instruction requires [Brifely describe the main task]
+   - Key objects involved: [Brifely list objects and their numbers from labeled image]
+   - Spatial relationships: [Brifely describe relevant spatial relationships]
+
+2. Action Planning:
+   - First step needed: [Brifely explain why this step is necessary]
+   - Subsequent steps: [Brifely explain the sequence logic]
+   - Pattern selection: [Brifely explain why this pattern is appropriate]
+
+3. Constraint Checking:
+   - Verify pattern matches valid sequences
+   - Confirm spatial requirements are met
+   - Ensure all necessary objects are addressed
+</think> <answer> 
+[
+    {
+        "name": "Skill Name 1",
+        "params": {
+            "parameter": "value"
+        }
+    },
+    {
+        "name": "Skill Name 2",
+        "params": {
+            "parameter": "value"
+        }
+    }
+]
+</answer>
+
+---
+
+### Valid Pattern Requirements:
+
+The output skill call sequence must match one or more of the following patterns to ensure correctness:
+
+Sub-skill sequence patterns:
+- ["pick", "place"]
+- ["pick", "insert"]
+- ["pick", "pour"]
+- ["pick", "pull"]
+- ["pick", "lift"]
+- ["pick", "push", "pull"]
+- ["pick", "open_door"]
+- ["press"]
+
+Important pattern selection notes:
+- Single "pick" skills alone are invalid
+- For displaying objects, use ["pick", "lift"] instead of ["pick", "place"]
+- For pulling out and displaying, use ["pick", "pull"] instead of ["pick", "place"]
+- Pattern selection must match spatial requirements in the task description
+- The answer must be a valid JSON array containing skill objects
