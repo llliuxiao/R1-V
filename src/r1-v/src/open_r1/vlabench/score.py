@@ -15,7 +15,8 @@ SUBTASK_PATTERN = [
     ["pick", "open_door"],
     ["press"],
 ]
-PATTERN = r"<think>(.*)?</think>\s*<answer>(.*)?</answer>"
+# PATTERN = r"<think>(.*)?</think>\s*<answer>(.*)?</answer>"
+PATTERN = r"```json(.*)?```"
 
 
 def calculate_skill_and_entity_scores(sequence1, sequence2):
@@ -89,7 +90,7 @@ def get_format_score(standard_skill_sequences, model_skill_sequences):
             rewards.append(0.0)
             continue
         try:
-            _, answer_content = matches[0]
+            answer_content = matches[0]
             json.loads(answer_content)
             rewards.append(1.0)
         except:
@@ -110,19 +111,18 @@ def get_accurancy_score(standard_skill_sequences, model_skill_sequences):
         if not matches:
             rewards.append(0.0)
             continue
-        _, answer_content = matches[0]
+        answer_content = matches[0]
         try:
             standard_skill_sequence = json.loads(standard_skill_sequence)[
                 "skill_sequence"
             ]
             model_skill_sequence = json.loads(answer_content)
+            skill_entity_scores = calculate_skill_and_entity_scores(
+                standard_skill_sequence, model_skill_sequence
+            )
         except:
             rewards.append(0.0)
             continue
-
-        skill_entity_scores = calculate_skill_and_entity_scores(
-            standard_skill_sequence, model_skill_sequence
-        )
 
         score_weight = {
             "skill_match_score": 0.5,

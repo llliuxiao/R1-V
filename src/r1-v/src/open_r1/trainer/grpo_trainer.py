@@ -211,10 +211,20 @@ class Qwen2VLGRPOTrainer(Trainer):
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
                     model, torch_dtype=torch.float16, **model_init_kwargs
                 )
+                for name, param in model.named_parameters():
+                    print(name)
+                    # param.requires_grad = False
+                    # if "model.layers.27" in name:
+                    #     param.requires_grad = True
             elif "Qwen2.5-VL" in model_id:
                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                     model, **model_init_kwargs
                 )
+                for name, param in model.named_parameters():
+                    print(name)
+                    # param.requires_grad = False
+                    # if "model.layers.27" in name:
+                    #     param.requires_grad = True
             elif "Aria" in model_id:
                 model_init_kwargs.pop("use_cache")
                 model = AriaForConditionalGeneration.from_pretrained(
