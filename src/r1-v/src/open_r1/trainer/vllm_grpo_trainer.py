@@ -40,6 +40,7 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from qwen_vl_utils import process_vision_info
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
@@ -72,6 +73,10 @@ if is_wandb_available():
     import wandb
 import torch.nn as nn
 from torch.utils.data import Sampler
+
+from open_r1.vlabench import get_prompt
+
+SYSTEM_PROMPT = get_prompt()
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -275,6 +280,8 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
             return features
 
         # Training arguments
+        args.max_prompt_length = 3172
+        args.max_completion_length = 3172
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = (
             args.max_completion_length
@@ -406,7 +413,7 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
-                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                        gpu_memory_utilization=0.8,
                         dtype=torch.bfloat16,
                         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
                         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
@@ -423,6 +430,7 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
                             else None
                         ),
                         max_model_len=args.max_completion_length,
+                        limit_mm_per_prompt={"image": 2},
                     )
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
@@ -503,27 +511,70 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
             per_token_logps.append(token_log_prob)
         return torch.stack(per_token_logps)
 
+    def get_ti_list(self, input_dict):
+        ti_list = []
+        ti_list.append(["text", SYSTEM_PROMPT])
+        ti_list.append(["text", "Input picture"])
+        ti_list.append(["image", input_dict["image"]])
+        ti_list.append(["text", "Input picture with numbered tags"])
+        ti_list.append(
+            ["image", input_dict["image_gt"].resize(input_dict["image"].size)]
+        )
+        ti_list.append(["text", "Language instruction:"])
+        ti_list.append(["text", input_dict["instruction"]])
+        ti_list.append(["text", "Please give the output skill sequence"])
+        return ti_list
+
+    def build_prompt_with_tilist(self, ti_list):
+        content = []
+        for ti in ti_list:
+            if ti[0] == "text":
+                content.append({"type": "text", "text": ti[1]})
+            elif ti[0] == "image":
+                content.append({"type": "image", "image": ti[1]})
+        return content
+
     # Trainer "prepares" the inputs before calling `compute_loss`. It converts to tensor and move to device.
     # Since we preprocess the data in `compute_loss`, we need to override this method to skip this step.
     def _prepare_inputs(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        prompts = [x["prompt"] for x in inputs]
-        images = [x["image"] for x in inputs]
-        prompts_text = [
-            maybe_apply_chat_template(example, self.processing_class)["prompt"]
-            for example in inputs
-        ]
+
+        #############################################################
+        # Start: Process input as VLABench
+        #############################################################
+        processed_prompts, processed_images = [], []
+        for input in inputs:
+            ti_list = self.get_ti_list(input)
+            content = self.build_prompt_with_tilist(ti_list)
+
+            # Messages containing multiple images and a text query
+            messages = [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ]
+            prompts_text = self.processing_class.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            images, videos = process_vision_info(messages)
+
+            processed_prompts.append(prompts_text)
+            processed_images.append(images)
+        #############################################################
+        # End: Process input as VLABench
+        #############################################################
+
         prompt_inputs = self.processing_class(
-            # prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-            text=prompts_text,
-            images=images,
+            text=processed_prompts,
+            images=processed_images,
             return_tensors="pt",
             padding=True,
-            padding_side="left",
-            add_special_tokens=False,
+            # add_special_tokens=False,
         )
+
         prompt_ids, prompt_mask = (
             prompt_inputs["input_ids"].to(device),
             prompt_inputs["attention_mask"].to(device),
@@ -552,8 +603,8 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
                 self._last_loaded_step = self.state.global_step
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-            all_prompts_text = gather_object(prompts_text)
-            all_images = gather_object(images)
+            all_prompts_text = gather_object(processed_prompts)
+            all_images = gather_object(processed_images)
             # group into pairs
             all_multimodal_inputs = [
                 {"prompt": p, "multi_modal_data": {"image": i}}
@@ -575,8 +626,8 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
                 completion_ids = [None] * len(all_prompts_text)
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
             process_slice = slice(
-                self.accelerator.process_index * len(prompts),
-                (self.accelerator.process_index + 1) * len(prompts),
+                self.accelerator.process_index * len(processed_prompts),
+                (self.accelerator.process_index + 1) * len(processed_prompts),
             )
             completion_ids = completion_ids[process_slice]
 
@@ -652,9 +703,18 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
             ]
 
         # Compute the rewards
+        prompts = [
+            prompt for prompt in processed_prompts for _ in range(self.num_generations)
+        ]
+        with open("log.txt", "w") as f:
+            f.writelines(f"completions: {completions[0]}\n")
+            f.writelines(f"prompts: {prompts[0]}\n")
+            f.writelines(f"standard_output: {inputs[0]['output']}\n")
+
         rewards_per_func = torch.zeros(
             len(prompts), len(self.reward_funcs), device=device
         )
+
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -692,8 +752,12 @@ class Qwen2VLGRPOVLLMTrainer(Trainer):
                     for example in inputs:
                         # Repeat each value in the column for `num_generations` times
                         reward_kwargs[key].extend([example[key]] * self.num_generations)
+                # output_reward_func = reward_func(
+                #     prompts=prompts, completions=completions, **reward_kwargs
+                # )
                 output_reward_func = reward_func(
-                    prompts=prompts, completions=completions, **reward_kwargs
+                    standard_skill_sequences=[x["output"] for x in inputs],
+                    model_skill_sequences=completions,
                 )
                 rewards_per_func[:, i] = torch.tensor(
                     output_reward_func, dtype=torch.float32, device=device

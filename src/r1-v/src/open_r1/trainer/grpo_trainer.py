@@ -55,7 +55,10 @@ from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url
 
 import copy
+from qwen_vl_utils import process_vision_info
+from open_r1.vlabench import get_prompt
 
+SYSTEM_PROMPT = get_prompt()
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -209,7 +212,7 @@ class Qwen2VLGRPOTrainer(Trainer):
             )
             if "Qwen2-VL" in model_id:
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    model, torch_dtype=torch.float16, **model_init_kwargs
+                    model, **model_init_kwargs
                 )
                 for name, param in model.named_parameters():
                     print(name)
@@ -425,26 +428,67 @@ class Qwen2VLGRPOTrainer(Trainer):
     ) -> dict[str, Union[torch.Tensor, Any]]:
         return inputs
 
+    def get_ti_list(self, input_dict):
+        ti_list = []
+        ti_list.append(["text", SYSTEM_PROMPT])
+        ti_list.append(["text", "Input picture"])
+        ti_list.append(["image", input_dict["image"]])
+        ti_list.append(["text", "Input picture with numbered tags"])
+        ti_list.append(
+            ["image", input_dict["image_gt"].resize(input_dict["image"].size)]
+        )
+        ti_list.append(["text", "Language instruction:"])
+        ti_list.append(["text", input_dict["instruction"]])
+        ti_list.append(["text", "Please give the output skill sequence"])
+        return ti_list
+
+    def build_prompt_with_tilist(self, ti_list):
+        content = []
+        for ti in ti_list:
+            if ti[0] == "text":
+                content.append({"type": "text", "text": ti[1]})
+            elif ti[0] == "image":
+                content.append({"type": "image", "image": ti[1]})
+        return content
+
     def compute_loss(
         self, model, inputs, return_outputs=False, num_items_in_batch=None
     ):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [
-            maybe_apply_chat_template(example, self.processing_class)["prompt"]
-            for example in inputs
-        ]
-        # .resize(x["image"].size)
-        images = [[x["image"], x["image_gt"].resize(x["image"].size)] for x in inputs]
+        #############################################################
+        # Start: Process input as VLABench
+        #############################################################
+        processed_prompts, processed_images = [], []
+        for input in inputs:
+            ti_list = self.get_ti_list(input)
+            content = self.build_prompt_with_tilist(ti_list)
+
+            # Messages containing multiple images and a text query
+            messages = [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ]
+            prompts_text = self.processing_class.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            images, videos = process_vision_info(messages)
+
+            processed_prompts.append(prompts_text)
+            processed_images.append(images)
+        #############################################################
+        # End: Process input as VLABench
+        #############################################################
+
         prompt_inputs = self.processing_class(
-            text=prompts_text,
-            images=images,
+            text=processed_prompts,
+            images=processed_images,
             return_tensors="pt",
             padding=True,
-            padding_side="left",
-            add_special_tokens=False,
+            # add_special_tokens=False,
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
 
@@ -532,7 +576,9 @@ class Qwen2VLGRPOTrainer(Trainer):
             ]
 
         # Compute the rewards
-        prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
+        prompts = [
+            prompt for prompt in processed_prompts for _ in range(self.num_generations)
+        ]
         with open("log.txt", "w") as f:
             f.writelines(f"completions: {completions[0]}\n")
             f.writelines(f"prompts: {prompts[0]}\n")

@@ -16,22 +16,10 @@ SUBTASK_PATTERN = [
     ["press"],
 ]
 # PATTERN = r"<think>(.*)?</think>\s*<answer>(.*)?</answer>"
-PATTERN = r"```json(.*)?```"
+# PATTERN = r"```json(.*)?```"
 
 
 def calculate_skill_and_entity_scores(sequence1, sequence2):
-    """
-    Calculate the skill match score and entity/container recognition match score of sequence2
-    relative to sequence1, without considering the order and the correspondence between skills and entities.
-
-    Parameters:
-        sequence1: list - The standard skill sequence (includes skills and target objects).
-        sequence2: list - The skill sequence to be compared.
-
-    Returns:
-        dict - A dictionary containing the skill match score and the percentage of correct entity/container recognition.
-    """
-
     skills1 = [skill["name"] for skill in sequence1]
     skills2 = [skill["name"] for skill in sequence2]
 
@@ -85,16 +73,12 @@ def get_format_score(standard_skill_sequences, model_skill_sequences):
     ]
     rewards = []
     for model_skill_sequence in model_skill_sequences:
-        matches = re.findall(PATTERN, model_skill_sequence, re.DOTALL)
-        if not matches:
-            rewards.append(0.0)
-            continue
         try:
-            answer_content = matches[0]
+            answer_content = model_skill_sequence.split("```json")[1].split("```")[0]
             json.loads(answer_content)
             rewards.append(1.0)
         except:
-            rewards.append(0.5)
+            rewards.append(0.0)
             continue
     return rewards
 
@@ -107,12 +91,8 @@ def get_accurancy_score(standard_skill_sequences, model_skill_sequences):
     assert len(standard_skill_sequences) == 1
     standard_skill_sequence = standard_skill_sequences[0]
     for model_skill_sequence in model_skill_sequences:
-        matches = re.findall(PATTERN, model_skill_sequence, re.DOTALL)
-        if not matches:
-            rewards.append(0.0)
-            continue
-        answer_content = matches[0]
         try:
+            answer_content = model_skill_sequence.split("```json")[1].split("```")[0]
             standard_skill_sequence = json.loads(standard_skill_sequence)[
                 "skill_sequence"
             ]
