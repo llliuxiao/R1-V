@@ -16,7 +16,8 @@ import os
 import textwrap
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
-
+import random
+import json
 import torch
 import torch.utils.data
 import transformers
@@ -40,6 +41,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
+from PIL import Image
 
 from trl.data_utils import (
     apply_chat_template,
@@ -56,7 +58,7 @@ from trl.trainer.utils import generate_model_card, get_comet_experiment_url
 
 import copy
 from qwen_vl_utils import process_vision_info
-from open_r1.vlabench import get_prompt
+from open_r1.vlabench import get_prompt, load_usable_datapoints
 
 SYSTEM_PROMPT = get_prompt()
 
@@ -175,8 +177,12 @@ class Qwen2VLGRPOTrainer(Trainer):
         peft_config: Optional["PeftConfig"] = None,
         max_pixels: Optional[int] = 12845056,
         min_pixels: Optional[int] = 3136,
+        use_oneshot: Optional[bool] = False,
         attn_implementation: str = "flash_attention_2",
     ):
+        self.use_oneshot = use_oneshot
+        self.datapoints = load_usable_datapoints()
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -212,22 +218,12 @@ class Qwen2VLGRPOTrainer(Trainer):
             )
             if "Qwen2-VL" in model_id:
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    model, **model_init_kwargs
+                    model, **model_init_kwargs, torch_dtype=torch.bfloat16
                 )
-                for name, param in model.named_parameters():
-                    print(name)
-                    # param.requires_grad = False
-                    # if "model.layers.27" in name:
-                    #     param.requires_grad = True
             elif "Qwen2.5-VL" in model_id:
                 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                     model, **model_init_kwargs
                 )
-                for name, param in model.named_parameters():
-                    print(name)
-                    # param.requires_grad = False
-                    # if "model.layers.27" in name:
-                    #     param.requires_grad = True
             elif "Aria" in model_id:
                 model_init_kwargs.pop("use_cache")
                 model = AriaForConditionalGeneration.from_pretrained(
@@ -431,6 +427,28 @@ class Qwen2VLGRPOTrainer(Trainer):
     def get_ti_list(self, input_dict):
         ti_list = []
         ti_list.append(["text", SYSTEM_PROMPT])
+        if self.use_oneshot:
+            shot_example = random.choice(self.datapoints)
+            example_pic, example_gt_pic, example_instruction, example_operation = (
+                shot_example
+            )
+            image = Image.open(example_pic)
+            image_gt = Image.open(example_gt_pic).resize(image.size)
+            ti_list.append(["text", "Example 1 input picture:"])
+            ti_list.append(["image", image])
+            ti_list.append(
+                [
+                    "text",
+                    "Example 1 input picture with numbered tags",
+                ]
+            )
+            ti_list.append(["image", image_gt])
+            ti_list.append(["text", "Example 1 language instruction:"])
+            with open(example_instruction, "r") as f:
+                ti_list.append(["text", f.read()])
+            ti_list.append(["text", "Example 1 output skill sequence"])
+            with open(example_operation, "r") as f:
+                ti_list.append(["text", f.read()])
         ti_list.append(["text", "Input picture"])
         ti_list.append(["image", input_dict["image"]])
         ti_list.append(["text", "Input picture with numbered tags"])
@@ -567,7 +585,7 @@ class Qwen2VLGRPOTrainer(Trainer):
 
         # Decode the generated completions
         completions = self.processing_class.batch_decode(
-            completion_ids, skip_special_tokens=True
+            completion_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
         if is_conversational(inputs[0]):
             completions = [
@@ -579,10 +597,6 @@ class Qwen2VLGRPOTrainer(Trainer):
         prompts = [
             prompt for prompt in processed_prompts for _ in range(self.num_generations)
         ]
-        with open("log.txt", "w") as f:
-            f.writelines(f"completions: {completions[0]}\n")
-            f.writelines(f"prompts: {prompts[0]}\n")
-            f.writelines(f"standard_output: {inputs[0]['output']}\n")
 
         rewards_per_func = torch.zeros(
             len(prompts), len(self.reward_funcs), device=device
@@ -634,6 +648,13 @@ class Qwen2VLGRPOTrainer(Trainer):
                 rewards_per_func[:, i] = torch.tensor(
                     output_reward_func, dtype=torch.float32, device=device
                 )
+
+        with open("log.txt", "a") as f:
+            for i, completion in enumerate(completions):
+                f.writelines(f"completions: {completion[0]['content']}\n")
+                f.writelines(f"score: {rewards_per_func[i, :].tolist()}\n")
+                f.writelines(f"standard_output: {inputs[0]['output']}\n")
+                f.writelines("-" * 50 + "\n")
 
         # Sum the rewards from all reward functions
         rewards = rewards_per_func.sum(dim=1)

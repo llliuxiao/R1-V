@@ -59,6 +59,9 @@ class GRPOScriptArguments(ScriptArguments):
         default=3136,
         metadata={"help": "Minimum number of pixels for the image"},
     )
+    use_oneshot: Optional[bool] = field(
+        default=False, metadata={"help": "If use oneshot in prompt in training"}
+    )
 
 
 reward_funcs_registry = {
@@ -123,6 +126,7 @@ def main(script_args, training_args, model_args):
         attn_implementation=model_args.attn_implementation,
         max_pixels=script_args.max_pixels,
         min_pixels=script_args.min_pixels,
+        use_oneshot=script_args.use_oneshot,
     )
     print("Initializing Trainer done and start training!")
 

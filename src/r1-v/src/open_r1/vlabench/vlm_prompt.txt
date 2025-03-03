@@ -158,3 +158,5 @@ Sub-skill sequence patterns:
 
 For example, if the output only includes a single "pick" skill, it will be considered incorrect during the evaluation.
 Please pay close attention to spatial information and ensure accurate pattern selection. For example, if the object needs to be picked up and displayed, use the pattern `["pick", "lift"]`. If the object needs to be pulled out and displayed, use the pattern `["pick", "pull"]`. If `["pick", "place"]` is used incorrectly in place of these patterns, it will be considered an error.
+
+Note that I will use `json.loads(answer.split("```json")[1].split("```")[0])` to process your answer, so your output should follow the format above!

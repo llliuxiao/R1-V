@@ -1,6 +1,4 @@
-import networkx as nx
 import json
-import matplotlib.pyplot as plt
 from collections import Counter
 import re
 
@@ -67,10 +65,11 @@ def calculate_skill_and_entity_scores(sequence1, sequence2):
     }
 
 
-def get_format_score(standard_skill_sequences, model_skill_sequences):
-    model_skill_sequences = [
-        completion[0]["content"] for completion in model_skill_sequences
-    ]
+def get_format_score(standard_skill_sequences, model_skill_sequences, eval=False):
+    if not eval:
+        model_skill_sequences = [
+            completion[0]["content"] for completion in model_skill_sequences
+        ]
     rewards = []
     for model_skill_sequence in model_skill_sequences:
         try:
@@ -83,24 +82,25 @@ def get_format_score(standard_skill_sequences, model_skill_sequences):
     return rewards
 
 
-def get_accurancy_score(standard_skill_sequences, model_skill_sequences):
-    model_skill_sequences = [
-        completion[0]["content"] for completion in model_skill_sequences
-    ]
+def get_accurancy_score(standard_skill_sequences, model_skill_sequences, eval=False):
+    if not eval:
+        model_skill_sequences = [
+            completion[0]["content"] for completion in model_skill_sequences
+        ]
     rewards = []
     assert len(standard_skill_sequences) == 1
-    standard_skill_sequence = standard_skill_sequences[0]
+    standard_skill_sequence = json.loads(standard_skill_sequences[0])["skill_sequence"]
     for model_skill_sequence in model_skill_sequences:
         try:
             answer_content = model_skill_sequence.split("```json")[1].split("```")[0]
-            standard_skill_sequence = json.loads(standard_skill_sequence)[
-                "skill_sequence"
-            ]
             model_skill_sequence = json.loads(answer_content)
             skill_entity_scores = calculate_skill_and_entity_scores(
                 standard_skill_sequence, model_skill_sequence
             )
         except:
+            if not eval:
+                with open("log.txt", "a") as f:
+                    f.writelines(f"skill_match_score:0, entity_match_score:0\n")
             rewards.append(0.0)
             continue
 
@@ -111,5 +111,12 @@ def get_accurancy_score(standard_skill_sequences, model_skill_sequences):
         total_score = sum(
             score_weight[key] * value for key, value in skill_entity_scores.items()
         )
+        if not eval:
+            with open("log.txt", "a") as f:
+                skill_match_score = skill_entity_scores["skill_match_score"]
+                entity_match_score = skill_entity_scores["entity_match_score"]
+                f.writelines(
+                    f"skill_match_score:{skill_match_score}, entity_match_score: {entity_match_score}\n"
+                )
         rewards.append(total_score)
     return rewards
